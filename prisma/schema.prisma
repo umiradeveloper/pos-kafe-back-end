@@ -1,0 +1,216 @@
+// Schema database POS Kafe
+// Semua nominal uang disimpan sebagai Int (Rupiah, tanpa desimal).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  OWNER
+  ADMIN
+  CASHIER
+}
+
+enum OrderType {
+  DINE_IN
+  TAKEAWAY
+}
+
+enum PaymentMethod {
+  CASH
+  QRIS
+  CARD
+  EWALLET
+}
+
+enum OrderStatus {
+  PAID
+  VOID
+}
+
+enum ShiftStatus {
+  OPEN
+  CLOSED
+}
+
+enum StockMovementType {
+  IN // stok masuk (pembelian / restock)
+  OUT // stok keluar (rusak, terbuang, dipakai sendiri)
+  ADJUST // penyesuaian hasil stok opname
+  SALE // terjual lewat kasir
+  VOID // dikembalikan karena transaksi dibatalkan
+}
+
+enum CashMovementType {
+  IN
+  OUT
+}
+
+model User {
+  id        Int      @id @default(autoincrement())
+  name      String   @db.VarChar(100)
+  username  String   @unique @db.VarChar(50)
+  password  String   @db.VarChar(255)
+  role      Role     @default(CASHIER)
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  shifts         Shift[]
+  orders         Order[]
+  stockMovements StockMovement[]
+
+  @@map("users")
+}
+
+model Category {
+  id        Int      @id @default(autoincrement())
+  name      String   @unique @db.VarChar(100)
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  products Product[]
+
+  @@map("categories")
+}
+
+model Product {
+  id         Int       @id @default(autoincrement())
+  name       String    @db.VarChar(150)
+  sku        String?   @unique @db.VarChar(50)
+  categoryId Int?
+  category   Category? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  price      Int // harga jual
+  cost       Int       @default(0) // HPP / modal per porsi
+  trackStock Boolean   @default(true)
+  stock      Int       @default(0)
+  minStock   Int       @default(0) // batas notifikasi stok menipis
+  imageUrl   String?   @db.VarChar(500)
+  isActive   Boolean   @default(true)
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  orderItems     OrderItem[]
+  stockMovements StockMovement[]
+
+  @@index([categoryId])
+  @@map("products")
+}
+
+model StockMovement {
+  id         Int               @id @default(autoincrement())
+  productId  Int
+  product    Product           @relation(fields: [productId], references: [id], onDelete: Cascade)
+  userId     Int?
+  user       User?             @relation(fields: [userId], references: [id], onDelete: SetNull)
+  type       StockMovementType
+  qty        Int // bertanda: positif = masuk, negatif = keluar
+  stockAfter Int
+  note       String?           @db.VarChar(255)
+  reference  String?           @db.VarChar(50) // mis. nomor invoice
+  createdAt  DateTime          @default(now())
+
+  @@index([productId, createdAt])
+  @@map("stock_movements")
+}
+
+model Shift {
+  id           Int         @id @default(autoincrement())
+  userId       Int
+  user         User        @relation(fields: [userId], references: [id])
+  status       ShiftStatus @default(OPEN)
+  openingCash  Int
+  expectedCash Int?
+  closingCash  Int?
+  difference   Int?
+  note         String?     @db.Text
+  openedAt     DateTime    @default(now())
+  closedAt     DateTime?
+
+  orders        Order[]
+  cashMovements CashMovement[]
+
+  @@index([userId, status])
+  @@map("shifts")
+}
+
+model CashMovement {
+  id        Int              @id @default(autoincrement())
+  shiftId   Int
+  shift     Shift            @relation(fields: [shiftId], references: [id], onDelete: Cascade)
+  type      CashMovementType
+  amount    Int
+  note      String           @db.VarChar(255)
+  createdAt DateTime         @default(now())
+
+  @@map("cash_movements")
+}
+
+model Order {
+  id            Int           @id @default(autoincrement())
+  invoiceNo     String        @unique @db.VarChar(30)
+  shiftId       Int
+  shift         Shift         @relation(fields: [shiftId], references: [id])
+  userId        Int
+  user          User          @relation(fields: [userId], references: [id])
+  orderType     OrderType     @default(DINE_IN)
+  tableNo       String?       @db.VarChar(20)
+  customerName  String?       @db.VarChar(100)
+  subtotal      Int
+  discount      Int           @default(0)
+  serviceCharge Int           @default(0)
+  tax           Int           @default(0)
+  total         Int
+  paymentMethod PaymentMethod
+  paidAmount    Int
+  changeAmount  Int           @default(0)
+  status        OrderStatus   @default(PAID)
+  note          String?       @db.VarChar(255)
+  voidReason    String?       @db.VarChar(255)
+  voidedAt      DateTime?
+  createdAt     DateTime      @default(now())
+
+  items OrderItem[]
+
+  @@index([createdAt])
+  @@index([shiftId])
+  @@map("orders")
+}
+
+model OrderItem {
+  id          Int      @id @default(autoincrement())
+  orderId     Int
+  order       Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  productId   Int?
+  product     Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
+  productName String   @db.VarChar(150) // disalin agar struk lama tetap utuh
+  price       Int
+  cost        Int      @default(0)
+  qty         Int
+  note        String?  @db.VarChar(255)
+  subtotal    Int
+
+  @@index([orderId])
+  @@index([productId])
+  @@map("order_items")
+}
+
+// Pengaturan toko (hanya satu baris, id = 1)
+model Setting {
+  id             Int      @id @default(1)
+  storeName      String   @default("Kafe Saya") @db.VarChar(100)
+  address        String?  @db.VarChar(255)
+  phone          String?  @db.VarChar(30)
+  taxPercent     Float    @default(10) // PB1 / pajak restoran
+  servicePercent Float    @default(0)
+  receiptFooter  String?  @db.VarChar(255)
+  updatedAt      DateTime @updatedAt
+
+  @@map("settings")
+}
